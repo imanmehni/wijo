@@ -83,3 +83,4 @@ lib/
 types/
   index.ts                       Shared domain types
 ```
+# wijo
