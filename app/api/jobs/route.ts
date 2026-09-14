@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { getNextRunAt } from "@/lib/scheduler";
 import type {
   ApiErrorResponse,
   ApiItemResponse,
@@ -50,14 +49,21 @@ export async function POST(
     parsed_request,
     timezone,
     schedule,
+    is_active,
   } = body;
 
-  const jobTimezone = timezone || "Asia/Tehran";
-
-  const nextRunAt = getNextRunAt(
-    schedule,
-    jobTimezone
-  );
+  if (
+    !project_id ||
+    !name ||
+    !source_type ||
+    !raw_request ||
+    !parsed_request
+  ) {
+    return NextResponse.json(
+      { error: "Missing required fields" },
+      { status: 400 }
+    );
+  }
 
   const { data, error } = await supabase
     .from("jobs")
@@ -68,9 +74,10 @@ export async function POST(
         source_type,
         raw_request,
         parsed_request,
-        timezone: jobTimezone,
-        schedule,
-        next_run_at: nextRunAt?.toISOString() ?? null,
+        timezone: timezone || "Asia/Tehran",
+        schedule: schedule || null,
+        is_active: is_active ?? true,
+        last_run: null,
       },
     ])
     .select()

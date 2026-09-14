@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { getNextRunAt } from "@/lib/scheduler";
 import type {
   ApiErrorResponse,
   ApiItemResponse,
@@ -52,73 +51,36 @@ export async function PATCH(
     is_active,
   } = body;
 
-  const { data: currentJob, error: currentJobError } = await supabase
-    .from("jobs")
-    .select("*")
-    .eq("id", id)
-    .single();
-
-  if (currentJobError || !currentJob) {
-    return NextResponse.json(
-      { error: "Job not found" },
-      { status: 404 }
-    );
-  }
-
-  const finalTimezone =
-    timezone !== undefined
-      ? timezone || "Asia/Tehran"
-      : currentJob.timezone || "Asia/Tehran";
-
-  const finalSchedule =
-    schedule !== undefined
-      ? schedule
-      : currentJob.schedule;
-
-  const finalIsActive =
-    is_active !== undefined
-      ? is_active
-      : currentJob.is_active;
-
-  const updates: Partial<Job> & {
-    next_run_at?: string | null;
-  } = {
+  const updates: Partial<Job> = {
     updated_at: new Date().toISOString(),
   };
 
-  if (name !== undefined) updates.name = name;
-  if (source_type !== undefined) updates.source_type = source_type;
-  if (raw_request !== undefined) updates.raw_request = raw_request;
+  if (name !== undefined) {
+    updates.name = name;
+  }
+
+  if (source_type !== undefined) {
+    updates.source_type = source_type;
+  }
+
+  if (raw_request !== undefined) {
+    updates.raw_request = raw_request;
+  }
+
   if (parsed_request !== undefined) {
     updates.parsed_request = parsed_request;
   }
 
   if (timezone !== undefined) {
-    updates.timezone = finalTimezone;
+    updates.timezone = timezone;
   }
 
   if (schedule !== undefined) {
-    updates.schedule = finalSchedule;
+    updates.schedule = schedule;
   }
 
   if (is_active !== undefined) {
-    updates.is_active = finalIsActive;
-  }
-
-  const scheduleChanged =
-    schedule !== undefined ||
-    timezone !== undefined;
-
-  if (!finalIsActive) {
-    updates.next_run_at = null;
-  } else if (scheduleChanged) {
-    const nextRunAt = getNextRunAt(
-      finalSchedule,
-      finalTimezone
-    );
-
-    updates.next_run_at =
-      nextRunAt?.toISOString() ?? null;
+    updates.is_active = is_active;
   }
 
   const { data, error } = await supabase
