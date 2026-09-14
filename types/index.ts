@@ -48,6 +48,7 @@ export interface Job {
   last_run: string | null;
   created_at: string;
   updated_at: string;
+  next_run_at: string | null;
 }
 
 export interface ExecutionAttempt {
