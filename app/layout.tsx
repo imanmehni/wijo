@@ -4,8 +4,8 @@ import { Terminal } from "lucide-react";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "API Watcher Console",
-  description: "Production-ready internal DevOps tool",
+  title: "wijo IMAN MEHNI",
+  description: "iman mehni",
 };
 
 export default function RootLayout({
@@ -23,7 +23,7 @@ export default function RootLayout({
               className="flex items-center gap-3 text-neutral-300 hover:text-white transition-colors"
             >
               <Terminal className="w-5 h-5 text-cyan-500" />
-              <span className="font-bold tracking-widest uppercase">API WATCHER</span>
+              <span className="font-bold tracking-widest uppercase">WIJO IMAN MEHNI</span>
             </Link>
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_#22c55e] animate-pulse"></div>
