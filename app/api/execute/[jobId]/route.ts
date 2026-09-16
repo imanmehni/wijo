@@ -1,43 +1,88 @@
-import { NextRequest, NextResponse } from "next/server";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
+
 import { supabase } from "@/lib/supabase";
-import { executeJob } from "@/lib/runner";
-import type { ApiErrorResponse, ExecutionResult, Job } from "@/types";
+
+import {
+  executeJobChain,
+} from "@/lib/execution-chain";
+
+import type {
+  ApiErrorResponse,
+  Job,
+} from "@/types";
 
 interface RouteContext {
-  params: Promise<{ jobId: string }>;
+  params: Promise<{
+    jobId: string;
+  }>;
 }
 
-/**
- * Manually triggers a job execution (e.g. from the job detail page's
- * "Run now" button). Mirrors what the cron endpoint does for a single job.
- */
 export async function POST(
   _request: NextRequest,
-  { params }: RouteContext
-): Promise<NextResponse<ExecutionResult | ApiErrorResponse>> {
-  const { jobId } = await params;
+  {
+    params,
+  }: RouteContext
+) {
+  const { jobId } =
+    await params;
 
-  const { data: job, error } = await supabase
+  const {
+    data: job,
+    error,
+  } = await supabase
     .from("jobs")
     .select("*")
     .eq("id", jobId)
     .single();
 
-  if (error || !job) {
-    return NextResponse.json({ error: "Job not found" }, { status: 404 });
+  if (
+    error ||
+    !job
+  ) {
+    return NextResponse.json(
+      {
+        error:
+          "Job not found",
+      },
+      {
+        status: 404,
+      }
+    );
   }
 
   try {
-    const result = await executeJob(job as Job, "MANUAL");
+    /*
+     * IMPORTANT:
+     *
+     * SEND NOW now uses the exact
+     * same chain engine as CRON.
+     */
 
-    await supabase
-      .from("jobs")
-      .update({ last_run: new Date().toISOString() })
-      .eq("id", jobId);
+    const result =
+      await executeJobChain(
+        job as Job,
+        "MANUAL"
+      );
 
-    return NextResponse.json(result);
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "Execution failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      result
+    );
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Execution failed";
+
+    return NextResponse.json(
+      {
+        error: message,
+      },
+      {
+        status: 500,
+      }
+    );
   }
 }

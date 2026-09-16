@@ -48,6 +48,78 @@ function getLocalDateParts(
   };
 }
 
+export function formatDateOnly(
+  date: Date,
+  timeZone: string =
+    DEFAULT_TIMEZONE
+): string {
+  const parts =
+    getLocalDateParts(
+      date,
+      timeZone
+    );
+
+  return [
+    parts.year,
+    String(parts.month).padStart(
+      2,
+      "0"
+    ),
+    String(parts.day).padStart(
+      2,
+      "0"
+    ),
+  ].join("-");
+}
+
+export function getTodayDate(
+  timeZone: string =
+    DEFAULT_TIMEZONE,
+  now: Date = new Date()
+): string {
+  return formatDateOnly(
+    now,
+    timeZone
+  );
+}
+
+export function addDaysToDateString(
+  dateString: string,
+  days: number
+): string {
+  const [
+    year,
+    month,
+    day,
+  ] = dateString
+    .split("-")
+    .map(Number);
+
+  const date = new Date(
+    Date.UTC(
+      year,
+      month - 1,
+      day + days,
+      12,
+      0,
+      0
+    )
+  );
+
+  return date
+    .toISOString()
+    .slice(0, 10);
+}
+
+export function compareDateOnly(
+  a: string,
+  b: string
+): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
 export function isJobDueToday(
   lastRun:
     | string
@@ -79,83 +151,16 @@ export function isJobDueToday(
   }
 
   const today =
-    getLocalDateParts(
-      now,
-      tz
+    getTodayDate(
+      tz,
+      now
     );
 
   const lastRunLocal =
-    getLocalDateParts(
+    formatDateOnly(
       lastRunDate,
       tz
     );
 
-  return !(
-    today.year ===
-      lastRunLocal.year &&
-    today.month ===
-      lastRunLocal.month &&
-    today.day ===
-      lastRunLocal.day
-  );
-}
-
-/**
- * Adds calendar days using the requested timezone.
- *
- * The returned Date is an arithmetic anchor.
- * Use formatDate/resolveVariables for actual
- * timezone-aware display.
- */
-export function addCalendarDays(
-  date: Date,
-  days: number,
-  timezone:
-    | string
-    | null
-    | undefined
-): Date {
-  const tz =
-    timezone ||
-    DEFAULT_TIMEZONE;
-
-  const parts =
-    getLocalDateParts(
-      date,
-      tz
-    );
-
-  const result = new Date(
-    Date.UTC(
-      parts.year,
-      parts.month - 1,
-      parts.day,
-      12,
-      0,
-      0
-    )
-  );
-
-  result.setUTCDate(
-    result.getUTCDate() + days
-  );
-
-  return result;
-}
-
-/**
- * Returns the next calendar date.
- */
-export function getNextRunAt(
-  current: Date = new Date(),
-  timezone:
-    | string
-    | null
-    | undefined
-): Date {
-  return addCalendarDays(
-    current,
-    1,
-    timezone
-  );
+  return today !== lastRunLocal;
 }

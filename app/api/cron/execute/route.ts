@@ -1,18 +1,35 @@
-import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
-import { executeJob } from "@/lib/runner";
-import { isJobDueToday, addCalendarDays } from "@/lib/scheduler";
-import type { ApiErrorResponse, Job } from "@/types";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
 
-const MAX_DAYS = 30;
+import { supabase } from "@/lib/supabase";
+
+import {
+  executeJobChain,
+} from "@/lib/execution-chain";
+
+import {
+  isJobDueToday,
+} from "@/lib/scheduler";
+
+import type {
+  ApiErrorResponse,
+  Job,
+} from "@/types";
 
 interface CronExecutionResult {
   jobId: string;
   success: boolean;
   skipped?: boolean;
+
   datesProcessed?: number;
-  startedAt?: string;
-  stoppedAt?: string;
+
+  startedDate?: string;
+  stoppedDate?: string;
+
+  lastSuccessfulDate?: string;
+
   error?: string;
 }
 
@@ -23,93 +40,35 @@ interface CronResponse {
   results: CronExecutionResult[];
 }
 
-function parseDateOnly(
-  value: string,
-  timezone: string
-): Date {
-  const [year, month, day] = value
-    .split("-")
-    .map(Number);
-
-  return new Date(
-    Date.UTC(
-      year,
-      month - 1,
-      day,
-      12,
-      0,
-      0
-    )
-  );
-}
-
-function getToday(
-  timezone: string
-): Date {
-  const now = new Date();
-
-  const formatter = new Intl.DateTimeFormat(
-    "en-US",
-    {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }
-  );
-
-  const parts = formatter.formatToParts(now);
-
-  const values: Record<string, number> = {};
-
-  for (const part of parts) {
-    if (
-      part.type === "year" ||
-      part.type === "month" ||
-      part.type === "day"
-    ) {
-      values[part.type] = Number(part.value);
-    }
-  }
-
-  return new Date(
-    Date.UTC(
-      values.year,
-      values.month - 1,
-      values.day,
-      12,
-      0,
-      0
-    )
-  );
-}
-
 export async function GET(
   request: NextRequest
 ): Promise<
   NextResponse<
-    CronResponse | ApiErrorResponse
+    CronResponse |
+      ApiErrorResponse
   >
 > {
   /*
-   * --------------------------------------------------
-   * CRON AUTH
-   * --------------------------------------------------
+   * AUTH
    */
 
   const authHeader =
-    request.headers.get("authorization");
+    request.headers.get(
+      "authorization"
+    );
 
   const cronSecret =
     process.env.CRON_SECRET;
 
   if (
     cronSecret &&
-    authHeader !== `Bearer ${cronSecret}`
+    authHeader !==
+      `Bearer ${cronSecret}`
   ) {
     return NextResponse.json(
       {
-        error: "Unauthorized",
+        error:
+          "Unauthorized",
       },
       {
         status: 401,
@@ -118,9 +77,7 @@ export async function GET(
   }
 
   /*
-   * --------------------------------------------------
    * LOAD ACTIVE JOBS
-   * --------------------------------------------------
    */
 
   const {
@@ -129,10 +86,16 @@ export async function GET(
   } = await supabase
     .from("jobs")
     .select("*")
-    .eq("is_active", true)
-    .order("created_at", {
-      ascending: true,
-    });
+    .eq(
+      "is_active",
+      true
+    )
+    .order(
+      "created_at",
+      {
+        ascending: true,
+      }
+    );
 
   if (error) {
     console.error(
@@ -163,36 +126,40 @@ export async function GET(
     });
   }
 
-  const results: CronExecutionResult[] =
+  const results:
+    CronExecutionResult[] =
     [];
 
-  const now = new Date();
+  const now =
+    new Date();
 
   /*
-   * --------------------------------------------------
-   * CHECK DAILY SCHEDULE
-   * --------------------------------------------------
+   * Only run once per calendar day.
    */
 
-  const dueJobs = (jobs as Job[]).filter(
-    (job) =>
-      isJobDueToday(
-        job.last_run,
-        job.timezone,
-        now
-      )
-  );
+  const dueJobs =
+    (jobs as Job[]).filter(
+      (job) =>
+        isJobDueToday(
+          job.last_run,
+          job.timezone,
+          now
+        )
+    );
 
-  const skippedJobs = (jobs as Job[]).filter(
-    (job) =>
-      !isJobDueToday(
-        job.last_run,
-        job.timezone,
-        now
-      )
-  );
+  const skippedJobs =
+    (jobs as Job[]).filter(
+      (job) =>
+        !isJobDueToday(
+          job.last_run,
+          job.timezone,
+          now
+        )
+    );
 
-  for (const job of skippedJobs) {
+  for (
+    const job of skippedJobs
+  ) {
     results.push({
       jobId: job.id,
       success: true,
@@ -201,212 +168,36 @@ export async function GET(
   }
 
   /*
-   * --------------------------------------------------
-   * EXECUTE DUE JOBS
-   * --------------------------------------------------
+   * Execute chains
    */
 
-  for (const job of dueJobs) {
-    const timezone =
-      job.timezone || "Asia/Tehran";
-
+  for (
+    const job of dueJobs
+  ) {
     try {
-      /*
-       * ----------------------------------------------
-       * DETERMINE START DATE
-       * ----------------------------------------------
-       *
-       * First ever execution:
-       *     today
-       *
-       * After successful dates:
-       *     last_success_date + 1
-       *
-       * Example:
-       *
-       * 15 ✅
-       * 16 ✅
-       * 17 ❌
-       *
-       * next Cron:
-       * 17
-       */
-
-      let currentDate: Date;
-
-      if (job.last_success_date) {
-        const lastSuccessDate =
-          parseDateOnly(
-            job.last_success_date,
-            timezone
-          );
-
-        currentDate =
-          addCalendarDays(
-            lastSuccessDate,
-            1,
-            timezone
-          );
-      } else {
-        currentDate =
-          getToday(timezone);
-      }
-
-      /*
-       * ----------------------------------------------
-       * PROCESS DATE CHAIN
-       * ----------------------------------------------
-       */
-
-      let datesProcessed = 0;
-      let jobSuccess = true;
-      let stoppedAt:
-        | string
-        | undefined;
-
-      let lastSuccessfulDate:
-        | Date
-        | null = null;
-
-      const startedAt =
-        currentDate
-          .toISOString()
-          .slice(0, 10);
-
-      while (
-        datesProcessed < MAX_DAYS
-      ) {
-        const currentDateString =
-          currentDate
-            .toISOString()
-            .slice(0, 10);
-
-        console.log(
-          `[cron] Job ${job.id} → ${currentDateString}`
+      const result =
+        await executeJobChain(
+          job,
+          "CRON"
         );
-
-        /*
-         * Execute exactly ONE date.
-         *
-         * resolveVariables() receives currentDate,
-         * therefore:
-         *
-         * (date)
-         * (date+1)
-         * (date-1)
-         *
-         * are all based on this date.
-         */
-
-        const result =
-          await executeJob(
-            job,
-            "CRON",
-            currentDate
-          );
-
-        datesProcessed++;
-
-        /*
-         * --------------------------------------------
-         * SUCCESS
-         * --------------------------------------------
-         */
-
-        if (result.success) {
-          lastSuccessfulDate =
-            currentDate;
-
-          currentDate =
-            addCalendarDays(
-              currentDate,
-              1,
-              timezone
-            );
-
-          continue;
-        }
-
-        /*
-         * --------------------------------------------
-         * FAILURE → STOP
-         * --------------------------------------------
-         */
-
-        jobSuccess = false;
-        stoppedAt =
-          currentDateString;
-
-        console.log(
-          `[cron] Job ${job.id} stopped at ${currentDateString}`
-        );
-
-        break;
-      }
-
-      /*
-       * ------------------------------------------------
-       * UPDATE JOB STATE
-       * ------------------------------------------------
-       */
-
-      const finishedAt =
-        new Date().toISOString();
-
-      const updateData: Record<
-        string,
-        string | null
-      > = {
-        last_run: finishedAt,
-        updated_at: finishedAt,
-      };
-
-      /*
-       * Only update last_success_date when
-       * at least one date succeeded.
-       *
-       * If the first date fails, the previous
-       * last_success_date remains untouched.
-       */
-
-      if (lastSuccessfulDate) {
-        updateData.last_success_date =
-          lastSuccessfulDate
-            .toISOString()
-            .slice(0, 10);
-      }
-
-      const {
-        error: updateError,
-      } = await supabase
-        .from("jobs")
-        .update(updateData)
-        .eq("id", job.id)
-        .eq("is_active", true);
-
-      if (updateError) {
-        console.error(
-          `[cron] Failed to update job ${job.id}:`,
-          updateError
-        );
-      }
-
-      /*
-       * ------------------------------------------------
-       * RESULT
-       * ------------------------------------------------
-       */
 
       results.push({
         jobId: job.id,
-        success: jobSuccess,
-        datesProcessed,
-        startedAt,
-        ...(stoppedAt
-          ? {
-              stoppedAt,
-            }
-          : {}),
+
+        success:
+          result.success,
+
+        datesProcessed:
+          result.datesProcessed,
+
+        startedDate:
+          result.startedDate,
+
+        stoppedDate:
+          result.stoppedDate,
+
+        lastSuccessfulDate:
+          result.lastSuccessfulDate,
       });
     } catch (error) {
       console.error(
@@ -425,17 +216,10 @@ export async function GET(
     }
   }
 
-  /*
-   * --------------------------------------------------
-   * SUMMARY
-   * --------------------------------------------------
-   */
-
   const executed =
     results.filter(
       (result) =>
-        !result.skipped &&
-        result.success
+        !result.skipped
     ).length;
 
   const skipped =

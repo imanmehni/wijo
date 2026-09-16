@@ -1,7 +1,5 @@
 import { supabase } from "@/lib/supabase";
-import {
-  resolveVariables,
-} from "@/lib/variables";
+import { resolveVariables } from "@/lib/variables";
 
 import type {
   Job,
@@ -11,27 +9,33 @@ import type {
   ResolvedRequest,
 } from "@/types";
 
-/**
- * Basic SSRF prevention.
- */
-function isUrlSafe(urlStr: string): boolean {
+interface ExecuteJobOptions {
+  targetDate?: string;
+}
+
+function isUrlSafe(
+  urlStr: string
+): boolean {
   try {
-    const url = new URL(urlStr);
+    const url =
+      new URL(urlStr);
 
     if (
-      url.protocol !== "http:" &&
-      url.protocol !== "https:"
+      url.protocol !==
+        "http:" &&
+      url.protocol !==
+        "https:"
     ) {
       return false;
     }
 
-    const host = url.hostname.toLowerCase();
+    const host =
+      url.hostname;
 
     if (
       host === "localhost" ||
       host === "127.0.0.1" ||
-      host === "0.0.0.0" ||
-      host === "::1"
+      host === "0.0.0.0"
     ) {
       return false;
     }
@@ -41,7 +45,9 @@ function isUrlSafe(urlStr: string): boolean {
       /^10\./.test(host) ||
       /^192\.168\./.test(host) ||
       /^169\.254\./.test(host) ||
-      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(
+        host
+      )
     ) {
       return false;
     }
@@ -52,64 +58,70 @@ function isUrlSafe(urlStr: string): boolean {
   }
 }
 
-function buildCookieHeader(
-  cookies: Record<string, string>,
-  timezone: string,
-  baseDate: Date
-): string {
-  return Object.entries(cookies)
-    .map(([key, value]) => {
-      const resolvedKey = resolveVariables(
-        key,
-        timezone,
-        baseDate
-      );
+function createBaseDate(
+  targetDate?: string
+): Date {
+  if (!targetDate) {
+    return new Date();
+  }
 
-      const resolvedValue = resolveVariables(
-        value,
-        timezone,
-        baseDate
-      );
-
-      return `${resolvedKey}=${resolvedValue}`;
-    })
-    .join("; ");
+  return new Date(
+    `${targetDate}T12:00:00Z`
+  );
 }
 
-/**
- * Executes one date.
- *
- * Important:
- * This function does NOT advance dates.
- * The Cron route controls the date chain.
- */
 export async function executeJob(
   job: Job,
-  type: ExecutionType = "MANUAL",
-  baseDate: Date = new Date()
+  type: ExecutionType =
+    "MANUAL",
+  options: ExecuteJobOptions = {}
 ): Promise<ExecutionResult> {
-  const startTime = Date.now();
+  const startTime =
+    Date.now();
 
-  const timezone =
-    job.timezone || "Asia/Tehran";
+  const targetDate =
+    options.targetDate;
 
-  const resolvedUrl = resolveVariables(
-    job.parsed_request.url,
-    timezone,
-    baseDate
-  );
+  const baseDate =
+    createBaseDate(
+      targetDate
+    );
 
-  if (!isUrlSafe(resolvedUrl)) {
+  /*
+   * Resolve URL
+   */
+
+  const resolvedUrl =
+    resolveVariables(
+      job.parsed_request.url,
+      job.timezone,
+      baseDate
+    );
+
+  if (
+    !isUrlSafe(
+      resolvedUrl
+    )
+  ) {
     return {
       success: false,
+
       finalStatusCode: 0,
-      totalDuration: Date.now() - startTime,
+
+      totalDuration:
+        Date.now() -
+        startTime,
+
       resolvedRequest: {
         url: resolvedUrl,
-        method: job.parsed_request.method,
+        method:
+          job.parsed_request
+            .method,
         headers: {},
-        error: "Unsafe URL (SSRF Protection)",
+        error:
+          "Unsafe URL (SSRF Protection)",
       },
+
       attempts: [
         {
           attempt: 1,
@@ -124,69 +136,69 @@ export async function executeJob(
     };
   }
 
+  /*
+   * Resolve headers
+   */
+
   const resolvedHeaders: Record<
     string,
     string
   > = {};
 
-  for (const [key, value] of Object.entries(
-    job.parsed_request.headers || {}
-  )) {
+  for (
+    const [
+      key,
+      value,
+    ] of Object.entries(
+      job.parsed_request
+        .headers || {}
+    )
+  ) {
     resolvedHeaders[
       resolveVariables(
         key,
-        timezone,
+        job.timezone,
         baseDate
       )
-    ] = resolveVariables(
-      value,
-      timezone,
-      baseDate
-    );
+    ] =
+      resolveVariables(
+        value,
+        job.timezone,
+        baseDate
+      );
   }
 
-  /**
-   * Add parsed cookies if Cookie header
-   * does not already exist.
+  /*
+   * Resolve body
    */
-  const cookieHeader = buildCookieHeader(
-    job.parsed_request.cookies || {},
-    timezone,
-    baseDate
-  );
-
-  const existingCookieKey =
-    Object.keys(resolvedHeaders).find(
-      (key) =>
-        key.toLowerCase() === "cookie"
-    );
-
-  if (
-    cookieHeader &&
-    !existingCookieKey
-  ) {
-    resolvedHeaders.Cookie =
-      cookieHeader;
-  }
 
   const resolvedBody =
-    job.parsed_request.bodyRaw
+    job.parsed_request
+      .bodyRaw
       ? resolveVariables(
-          job.parsed_request.bodyRaw,
-          timezone,
+          job.parsed_request
+            .bodyRaw,
+          job.timezone,
           baseDate
         )
       : undefined;
 
   const method =
-    job.parsed_request.method || "GET";
+    job.parsed_request
+      .method || "GET";
 
-  const resolvedRequest: ResolvedRequest = {
+  const resolvedRequest:
+    ResolvedRequest = {
     url: resolvedUrl,
     method,
-    headers: resolvedHeaders,
+    headers:
+      resolvedHeaders,
     body: resolvedBody,
   };
+
+  /*
+   * Retry
+   */
 
   const maxRetries = 3;
 
@@ -199,7 +211,8 @@ export async function executeJob(
     504,
   ];
 
-  const attempts: ExecutionAttempt[] = [];
+  const attempts:
+    ExecutionAttempt[] = [];
 
   let success = false;
   let finalStatusCode = 0;
@@ -209,39 +222,55 @@ export async function executeJob(
     i <= maxRetries;
     i++
   ) {
-    const attemptStart = Date.now();
+    const attemptStart =
+      Date.now();
 
-    let attemptSuccess = false;
+    let attemptSuccess =
+      false;
+
     let attemptStatus = 0;
-    let attemptResponse: string | null =
-      null;
-    let attemptError: string | null =
-      null;
+
+    let attemptResponse:
+      | string
+      | null = null;
+
+    let attemptError:
+      | string
+      | null = null;
 
     const controller =
       new AbortController();
 
-    const timeoutId = setTimeout(
-      () => controller.abort(),
-      10000
-    );
-
-    try {
-      const response = await fetch(
-        resolvedUrl,
-        {
-          method,
-          headers: resolvedHeaders,
-          body:
-            method !== "GET" &&
-            method !== "HEAD"
-              ? resolvedBody
-              : undefined,
-          signal: controller.signal,
-        }
+    const timeoutId =
+      setTimeout(
+        () =>
+          controller.abort(),
+        10000
       );
 
-      clearTimeout(timeoutId);
+    try {
+      const response =
+        await fetch(
+          resolvedUrl,
+          {
+            method,
+            headers:
+              resolvedHeaders,
+
+            body:
+              method !== "GET" &&
+              method !== "HEAD"
+                ? resolvedBody
+                : undefined,
+
+            signal:
+              controller.signal,
+          }
+        );
+
+      clearTimeout(
+        timeoutId
+      );
 
       attemptStatus =
         response.status;
@@ -249,14 +278,19 @@ export async function executeJob(
       attemptResponse =
         await response.text();
 
-      if (response.ok) {
-        attemptSuccess = true;
+      if (
+        response.ok
+      ) {
+        attemptSuccess =
+          true;
       } else {
         attemptError =
           `HTTP ${response.status}`;
       }
     } catch (error) {
-      clearTimeout(timeoutId);
+      clearTimeout(
+        timeoutId
+      );
 
       attemptError =
         error instanceof Error
@@ -264,32 +298,34 @@ export async function executeJob(
           : String(error);
     }
 
-    const attemptDuration =
-      Date.now() - attemptStart;
-
     attempts.push({
       attempt: i,
-      duration: attemptDuration,
-      statusCode: attemptStatus,
-      success: attemptSuccess,
-      response: attemptResponse,
-      error: attemptError,
+      duration:
+        Date.now() -
+        attemptStart,
+
+      statusCode:
+        attemptStatus,
+
+      success:
+        attemptSuccess,
+
+      response:
+        attemptResponse,
+
+      error:
+        attemptError,
     });
 
-    if (attemptSuccess) {
+    if (
+      attemptSuccess
+    ) {
       success = true;
       finalStatusCode =
         attemptStatus;
-
       break;
     }
 
-    /**
-     * Non-retryable HTTP errors.
-     *
-     * 400, 401, 403, 404, etc.
-     * immediately stop this date.
-     */
     if (
       !retryCodes.includes(
         attemptStatus
@@ -298,44 +334,62 @@ export async function executeJob(
     ) {
       finalStatusCode =
         attemptStatus;
-
       break;
     }
 
-    if (i < maxRetries) {
+    if (
+      i < maxRetries
+    ) {
       await new Promise(
         (resolve) =>
-          setTimeout(resolve, 2000)
+          setTimeout(
+            resolve,
+            2000
+          )
       );
     }
   }
 
   const totalDuration =
-    Date.now() - startTime;
+    Date.now() -
+    startTime;
 
-  const result: ExecutionResult = {
-    success,
-    attempts,
-    finalStatusCode,
-    totalDuration,
-    resolvedRequest,
-  };
+  const result: ExecutionResult =
+    {
+      success,
+      attempts,
+      finalStatusCode,
+      totalDuration,
+      resolvedRequest,
+    };
 
-  /**
+  /*
    * Save execution.
+   *
+   * target_date tells us what date
+   * this request was actually for.
    */
+
   try {
     await supabase
       .from("executions")
       .insert({
         job_id: job.id,
         type,
+
+        target_date:
+          targetDate || null,
+
         resolved_request:
           resolvedRequest,
+
         attempts,
+
         success,
+
         final_status_code:
           finalStatusCode,
+
         total_duration:
           totalDuration,
       });
