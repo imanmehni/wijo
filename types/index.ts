@@ -91,6 +91,11 @@ export interface ExecutionResult {
   finalStatusCode: number;
   totalDuration: number;
   resolvedRequest: ResolvedRequest;
+  
+  // فیلدهای جدید برای کنترل هوشمند زنجیره
+  isAlreadyReserved?: boolean;
+  isAuthError?: boolean;
+  isCapacityFull?: boolean;
 }
 
 export interface PaginationMeta {
