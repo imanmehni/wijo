@@ -26,30 +26,39 @@ export async function executeJobChain(
   const today = getTodayDate(timezone);
 
   /*
-   * محاسبه تاریخ شروع
+   * -------------------------------------------------------------
+   * تعیین نقطه شروع بر اساس آخرین رزرو تایید شده واقعی
+   * -------------------------------------------------------------
    */
   let startDate: string;
 
   if (!job.last_success_date) {
+    // اگر تا به حال رزرو موفقی نبوده، از امروز شروع کن
     startDate = today;
   } else {
     const comparison = compareDateOnly(job.last_success_date, today);
+
     if (comparison < 0) {
+      // آخرین موفقیت مال قبل از امروز است -> باید از امروز شروع شود
       startDate = today;
     } else if (comparison === 0) {
+      // آخرین موفقیت امروز بوده -> از فردا شروع کن
       startDate = addDaysToDateString(today, 1);
     } else {
+      // آخرین موفقیت در روزهای آینده است (مثلاً فردا از قبل تایید شده) -> از بعد از آن شروع کن
       startDate = addDaysToDateString(job.last_success_date, 1);
     }
   }
 
   let currentDate = startDate;
   let datesProcessed = 0;
-  let lastSuccessfulDate: string | undefined = job.last_success_date || undefined;
+  let newLastSuccessfulDate: string | undefined = undefined;
   let stoppedDate: string | undefined;
 
   /*
-   * اجرای زنجیره روزها
+   * -------------------------------------------------------------
+   * پردازش روزها
+   * -------------------------------------------------------------
    */
   while (datesProcessed < MAX_DAYS) {
     console.log(`[execution-chain] ${job.id} → Checking target: ${currentDate}`);
@@ -60,50 +69,43 @@ export async function executeJobChain(
 
     datesProcessed++;
 
-    // حالت اول: رزرو با موفقیت انجام شد
+    // حالت ۱: رزرو با موفقیت قطعی انجام شد
     if (result.success) {
-      console.log(`[execution-chain] Successfully reserved: ${currentDate}`);
-      lastSuccessfulDate = currentDate;
+      console.log(`[execution-chain] ✅ CONFIRMED RESERVATION for: ${currentDate}`);
+      newLastSuccessfulDate = currentDate;
       currentDate = addDaysToDateString(currentDate, 1);
       continue;
     }
 
-    // حالت دوم: این تاریخ از قبل رزرو شده بود (نباید حلقه قطع شود!)
-    if (result.isAlreadyReserved) {
-      console.log(
-        `[execution-chain] ${currentDate} is ALREADY RESERVED. Skipping to next day.`
-      );
-      lastSuccessfulDate = currentDate;
+    // حالت ۲: تاریخ امروز از قبل رزرو بوده (فقط اگر امروز است رد شو و برو فردا)
+    if (result.isAlreadyReserved && currentDate === today) {
+      console.log(`[execution-chain] Today (${currentDate}) is already booked. Moving to tomorrow.`);
+      newLastSuccessfulDate = currentDate;
       currentDate = addDaysToDateString(currentDate, 1);
       continue;
     }
 
-    // حالت سوم: خطای بحرانی احراز هویت (سشن منقضی شده)
+    // حالت ۳: خطای احراز هویت (سشن باطل شده)
     if (result.isAuthError) {
-      console.error(
-        `[execution-chain] Critical Auth/Session error on ${currentDate}. Aborting chain.`
-      );
+      console.error(`[execution-chain] ❌ Auth session expired. Aborting.`);
       stoppedDate = currentDate;
       break;
     }
 
-    // حالت چهارم: ظرفیت تکمیل است
-    if (result.isCapacityFull) {
-      console.warn(
-        `[execution-chain] Capacity full on ${currentDate}. Checking tomorrow...`
-      );
-      currentDate = addDaysToDateString(currentDate, 1);
-      continue;
-    }
-
-    // سایر خطاها (مثلاً خارج از بازه مجاز سیستم رزرواسیون)
-    console.warn(`[execution-chain] Unhandled failure on ${currentDate}. Halting.`);
+    // حالت ۴: هر خطای دیگری (تاریخ هنوز در سیستم باز نشده، پر است و ...)
+    // ⚠️ مهم: نباید جلو برود! متوقف می‌شود تا در اجرای بعدی مجدداً همین تاریخ را چک کند
+    console.warn(
+      `[execution-chain] ⚠️ Target date ${currentDate} not available yet or errored. Stopping chain so it can retry later.`
+    );
     stoppedDate = currentDate;
     break;
   }
 
   /*
-   * ذخیره آخرین وضعیت جاب در دیتابیس
+   * -------------------------------------------------------------
+   * بروزرسانی دیتابیس
+   * فقط در صورتی last_success_date تغییر می‌کند که تایید واقعی گرفته باشد
+   * -------------------------------------------------------------
    */
   const finishedAt = new Date().toISOString();
   const updateData: Record<string, string> = {
@@ -111,8 +113,8 @@ export async function executeJobChain(
     updated_at: finishedAt,
   };
 
-  if (lastSuccessfulDate) {
-    updateData.last_success_date = lastSuccessfulDate;
+  if (newLastSuccessfulDate) {
+    updateData.last_success_date = newLastSuccessfulDate;
   }
 
   const { error: updateError } = await supabase
@@ -121,17 +123,18 @@ export async function executeJobChain(
     .eq("id", job.id);
 
   if (updateError) {
-    console.error(
-      `[execution-chain] Failed to update job ${job.id}:`,
-      updateError
-    );
+    console.error(`[execution-chain] Failed to update job:`, updateError);
   }
 
   return {
-    success: !stoppedDate || Boolean(lastSuccessfulDate),
+    success: !stoppedDate || Boolean(newLastSuccessfulDate),
     datesProcessed,
     startedDate: startDate,
     ...(stoppedDate ? { stoppedDate } : {}),
-    ...(lastSuccessfulDate ? { lastSuccessfulDate } : {}),
+    ...(newLastSuccessfulDate
+      ? { lastSuccessfulDate: newLastSuccessfulDate }
+      : job.last_success_date
+      ? { lastSuccessfulDate: job.last_success_date }
+      : {}),
   };
 }
